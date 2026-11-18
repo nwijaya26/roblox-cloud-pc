@@ -1,0 +1,81 @@
+name: roblox-studio-rdp
+
+# Cloud PC for the Roblox publish (roblox-brainrot-01).
+# Trigger manually from the GitHub app / mobile web: Actions -> roblox-studio-rdp -> Run workflow.
+# The runner is a throwaway Windows VM (windows-latest). It installs RustDesk
+# (remote desktop) + Roblox Studio, then stays alive so the user can connect
+# from their phone, open game.rbxl in Studio and click File > Publish to Roblox As.
+# SECURITY: the repo is on a THROWAWAY GitHub account (never the main account).
+# The RustDesk password is random per run and printed in the (public) job log;
+# the runner is destroyed when the job ends. Do NOT put any credentials in this repo.
+
+on:
+  workflow_dispatch:
+    inputs:
+      hours:
+        description: 'How long to keep the PC alive (hours, max 5)'
+        required: false
+        default: '2'
+
+jobs:
+  studio:
+    runs-on: windows-latest
+    timeout-minutes: 330
+    steps:
+      - name: Checkout game files
+        uses: actions/checkout@v4
+
+      - name: Decode game.rbxl
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          [IO.File]::WriteAllBytes("$env:GITHUB_WORKSPACE\game.rbxl", [Convert]::FromBase64String((Get-Content "$env:GITHUB_WORKSPACE\game.rbxl.b64" -Raw)))
+          Write-Output "GAME.RBXL DECODED: $((Get-Item "$env:GITHUB_WORKSPACE\game.rbxl").Length) bytes"
+
+      - name: Install RustDesk
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $rd = "$env:TEMP\rustdesk.exe"
+          Invoke-WebRequest -Uri "https://github.com/rustdesk/rustdesk/releases/download/1.5.3/rustdesk-1.5.3-x86_64.exe" -OutFile $rd
+          # Random 12-char password for this run only
+          $pw = -join ((48..57)+(65..90)+(97..122) | Get-Random -Count 12 | ForEach-Object {[char]$_})
+          $pw | Out-File -FilePath "$env:GITHUB_WORKSPACE\rdp-password.txt" -NoNewline
+          Start-Process -FilePath $rd -ArgumentList "--install" -Wait
+          Start-Sleep -Seconds 20
+          & $rd --password $pw
+          Start-Sleep -Seconds 10
+          $id = & $rd --get-id
+          Write-Output "=============================="
+          Write-Output "RUSTDESK ID: $id"
+          Write-Output "RUSTDESK PASSWORD: $pw"
+          Write-Output "=============================="
+
+      - name: Install Roblox Studio
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $inst = "$env:TEMP\StudioInstaller.exe"
+          Invoke-WebRequest -Uri "https://setup.roblox.com/RobloxStudioLauncherBeta.exe" -OutFile $inst
+          $p = Start-Process -FilePath $inst -PassThru
+          if (-not $p.WaitForExit(600000)) { $p | Stop-Process -Force }
+          $studio = Get-ChildItem "$env:LOCALAPPDATA\Roblox\Versions\*\RobloxStudioBeta.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($studio) { Write-Output "STUDIO OK: $($studio.FullName)" } else { Write-Output "STUDIO NOT FOUND - install it manually after connecting" }
+          Write-Output "GAME FILE: $env:GITHUB_WORKSPACE\game.rbxl"
+          if (Test-Path "$env:GITHUB_WORKSPACE\game.rbxl") { Write-Output "GAME.RBXL PRESENT" } else { Write-Output "GAME.RBXL MISSING" }
+
+      - name: Keep PC alive
+        shell: powershell
+        run: |
+          $hours = [int]"${{ inputs.hours }}"
+          if ($hours -lt 1) { $hours = 1 }
+          if ($hours -gt 5) { $hours = 5 }
+          $end = (Get-Date).AddHours($hours)
+          $pw = Get-Content "$env:GITHUB_WORKSPACE\rdp-password.txt" -Raw
+          $rd = "$env:TEMP\rustdesk.exe"
+          while ((Get-Date) -lt $end) {
+            $id = & $rd --get-id
+            Write-Output "ALIVE until $end | RUSTDESK ID: $id | PASSWORD: $pw"
+            Start-Sleep -Seconds 300
+          }
+          Write-Output "TIME UP - job ends, PC destroyed"
