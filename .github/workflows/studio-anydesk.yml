@@ -55,10 +55,22 @@ jobs:
             Start-Process -FilePath $adExe -WindowStyle Hidden
             Start-Sleep -Seconds 5
           }
-          # Set password DULUAN (tidak tergantung ID)
+          # Set password DULUAN (tidak tergantung ID). Run #2: --set-password
+          # mengembalikan exit code 1 (service belum siap / bentuk argumen tidak
+          # diterima) dan $LASTEXITCODE bocor sampai akhir script sehingga step
+          # gagal SETELAH kredensial tercetak. Perbaiki: tunggu service siap,
+          # coba bentuk argumen lalu stdin, dan reset $LASTEXITCODE.
+          Start-Sleep -Seconds 10
           $chars = (48..57) + (65..90) + (97..122)
           $pw = -join (1..12 | ForEach-Object { [char]($chars | Get-Random) })
           & $adExe --set-password $pw | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Output "--set-password (arg) exit $LASTEXITCODE, coba via stdin..."
+            Start-Sleep -Seconds 5
+            $pw | & $adExe --set-password | Out-Null
+            Write-Output "--set-password (stdin) exit $LASTEXITCODE"
+          }
+          $global:LASTEXITCODE = 0
           $pw | Out-File -FilePath "$env:GITHUB_WORKSPACE\anydesk-password.txt" -NoNewline
           Write-Output "Password unattended diset."
           # Poll ID sampai 300 detik. --get-id dipanggil via Start-Process + redirect
