@@ -55,20 +55,40 @@ jobs:
             Start-Process -FilePath $adExe -WindowStyle Hidden
             Start-Sleep -Seconds 5
           }
-          $id = ""
-          for ($i = 1; $i -le 24; $i++) {
-            Start-Sleep -Seconds 5
-            try { $id = ((& $adExe --get-id) | Out-String).Trim() } catch { $id = "" }
-            if ($id -and $id -match '\d') { Write-Output "ID ketemu setelah $($i * 5) detik."; break }
-            $id = ""
-            if ($i % 4 -eq 0) { Write-Output "Menunggu ID... ($($i * 5)s)" }
-          }
-          if (-not $id) { throw "AnyDesk ID kosong setelah 120 detik" }
+          # Set password DULUAN (tidak tergantung ID)
           $chars = (48..57) + (65..90) + (97..122)
           $pw = -join (1..12 | ForEach-Object { [char]($chars | Get-Random) })
           & $adExe --set-password $pw | Out-Null
-          "$id" | Out-File -FilePath "$env:GITHUB_WORKSPACE\anydesk-id.txt" -NoNewline
           $pw | Out-File -FilePath "$env:GITHUB_WORKSPACE\anydesk-password.txt" -NoNewline
+          Write-Output "Password unattended diset."
+          # Poll ID sampai 300 detik. --get-id dipanggil via Start-Process + redirect
+          # file (pola yang terbukti untuk RustDesk di runner ini — operator call
+          # PowerShell menutup pipe terlalu cepat untuk exe GUI sehingga output kosong).
+          # Run #1 GAGAL dengan pola call-operator (ID kosong 120 detik).
+          $id = ""
+          for ($i = 1; $i -le 30; $i++) {
+            Start-Sleep -Seconds 10
+            $p = Start-Process -FilePath $adExe -ArgumentList "--get-id" -RedirectStandardOutput "$env:TEMP\ad-id.txt" -RedirectStandardError "$env:TEMP\ad-id-err.txt" -WindowStyle Hidden -PassThru
+            $p.WaitForExit(15000) | Out-Null
+            $id = (Get-Content "$env:TEMP\ad-id.txt" -Raw -ErrorAction SilentlyContinue).Trim()
+            if ($id -and $id -match '\d') { Write-Output "ID ketemu setelah $($i * 10) detik."; break }
+            $id = ""
+            if ($i -eq 15) {
+              Write-Output "ID belum muncul setelah 150 detik - restart service sekali."
+              Restart-Service -Name "AnyDesk" -ErrorAction SilentlyContinue
+              Start-Sleep -Seconds 10
+            }
+            if ($i % 6 -eq 0) { Write-Output "Menunggu ID... ($($i * 10)s)" }
+          }
+          if (-not $id) {
+            Write-Output "!! ID MASIH KOSONG SETELAH 300 DETIK - DIAGNOSTIK:"
+            Get-Service -Name "AnyDesk" -ErrorAction SilentlyContinue | Format-List Name, Status | Out-String | Write-Output
+            Get-Process -Name "AnyDesk" -ErrorAction SilentlyContinue | Format-Table Id, ProcessName, StartTime | Out-String | Write-Output
+            Get-ChildItem "$env:APPDATA\AnyDesk" -ErrorAction SilentlyContinue | Format-Table Name, Length | Out-String | Write-Output
+            if (Test-Path "$env:TEMP\ad-id-err.txt") { Write-Output "STDERR TERAKHIR:"; Get-Content "$env:TEMP\ad-id-err.txt" -Raw -ErrorAction SilentlyContinue | Write-Output }
+            throw "AnyDesk ID kosong - lihat diagnostik di atas."
+          }
+          "$id" | Out-File -FilePath "$env:GITHUB_WORKSPACE\anydesk-id.txt" -NoNewline
           Write-Output "========================================"
           Write-Output "ANYDESK ID: $id"
           Write-Output "ANYDESK PASSWORD: $pw"
