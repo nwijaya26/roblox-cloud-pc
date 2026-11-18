@@ -67,7 +67,7 @@ jobs:
           # Invoke-WebRequest fails on setup.roblox.com with an SSL/TLS trust error on this runner; curl.exe handles it fine
           $ok = $false
           for ($i = 1; $i -le 3 -and -not $ok; $i++) {
-            curl.exe -L --retry 2 -o $inst "https://setup.roblox.com/RobloxStudioLauncherBeta.exe"
+            curl.exe -L --retry 2 -o $inst "https://setup.rbxcdn.com/RobloxStudioLauncherBeta.exe"
             if ((Test-Path $inst) -and (Get-Item $inst).Length -gt 100000) { $ok = $true } else { Start-Sleep -Seconds 10 }
           }
           if (-not $ok) { throw "Studio installer download failed" }
