@@ -1,0 +1,126 @@
+name: studio-anydesk
+
+# AnyDesk runner for the lanifa_27 Roblox publish (roblox-brainrot-01).
+# Same shape as sandi26's roblox-studio-rdp, but AnyDesk instead of RustDesk:
+# the agent's VM cannot connect via RustDesk's public server (login required),
+# AnyDesk free needs only ID + password. Runs on the THROWAWAY account
+# (nwijaya26/roblox-cloud-pc) — never the main account (suspended 18 Nov).
+# game.rbxl is uploaded to the repo root (binary, current build) — no decode,
+# no download from the suspended main account.
+
+on:
+  workflow_dispatch:
+    inputs:
+      hours:
+        description: 'How long to keep the PC alive (hours, max 5)'
+        required: false
+        default: '2'
+
+jobs:
+  studio:
+    runs-on: windows-latest
+    timeout-minutes: 330
+    steps:
+      - name: Checkout game files
+        uses: actions/checkout@v4
+
+      - name: Check game.rbxl
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $f = Get-Item "$env:GITHUB_WORKSPACE\game.rbxl"
+          Write-Output "GAME.RBXL: $($f.Length) bytes, sha256 $((Get-FileHash $f.FullName -Algorithm SHA256).Hash)"
+
+      - name: Install AnyDesk
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = "$env:TEMP\AnyDesk.exe"
+          $adExe = "C:\Program Files (x86)\AnyDesk\AnyDesk.exe"
+          if (-not (Test-Path $adExe)) {
+            Write-Output "Downloading AnyDesk ..."
+            Invoke-WebRequest -Uri "https://download.anydesk.com/AnyDesk.exe" -OutFile $installer
+            Write-Output "Silent install ..."
+            Start-Process -FilePath $installer -ArgumentList "--install `"C:\Program Files (x86)\AnyDesk`" --start-with-win --silent" -Wait -NoNewWindow
+            Start-Sleep -Seconds 10
+          }
+          if (-not (Test-Path $adExe)) { throw "AnyDesk.exe tidak ketemu setelah install: $adExe" }
+          Write-Output "AnyDesk terinstall: $adExe"
+          $svc = Get-Service -Name "AnyDesk" -ErrorAction SilentlyContinue
+          if ($svc) {
+            Write-Output "Service AnyDesk status: $($svc.Status)"
+            if ($svc.Status -ne 'Running') { Start-Service -Name "AnyDesk"; Start-Sleep -Seconds 5 }
+          } else {
+            Write-Output "Service AnyDesk tidak ada - jalankan proses langsung."
+            Start-Process -FilePath $adExe -WindowStyle Hidden
+            Start-Sleep -Seconds 5
+          }
+          $id = ""
+          for ($i = 1; $i -le 24; $i++) {
+            Start-Sleep -Seconds 5
+            try { $id = ((& $adExe --get-id) | Out-String).Trim() } catch { $id = "" }
+            if ($id -and $id -match '\d') { Write-Output "ID ketemu setelah $($i * 5) detik."; break }
+            $id = ""
+            if ($i % 4 -eq 0) { Write-Output "Menunggu ID... ($($i * 5)s)" }
+          }
+          if (-not $id) { throw "AnyDesk ID kosong setelah 120 detik" }
+          $chars = (48..57) + (65..90) + (97..122)
+          $pw = -join (1..12 | ForEach-Object { [char]($chars | Get-Random) })
+          & $adExe --set-password $pw | Out-Null
+          "$id" | Out-File -FilePath "$env:GITHUB_WORKSPACE\anydesk-id.txt" -NoNewline
+          $pw | Out-File -FilePath "$env:GITHUB_WORKSPACE\anydesk-password.txt" -NoNewline
+          Write-Output "========================================"
+          Write-Output "ANYDESK ID: $id"
+          Write-Output "ANYDESK PASSWORD: $pw"
+          Write-Output "========================================"
+
+      - name: Install Roblox Studio
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $inst = "$env:TEMP\StudioInstaller.exe"
+          # setup.roblox.com fails TLS on this runner (wrong-principal cert error, both IWR and curl); the same file is served from setup.rbxcdn.com (verified 200 OK, and www.roblox.com/download/studio officially redirects to setup.rbxcdn.com)
+          $ok = $false
+          for ($i = 1; $i -le 3 -and -not $ok; $i++) {
+            curl.exe -L --retry 2 -o $inst "https://setup.rbxcdn.com/RobloxStudioLauncherBeta.exe"
+            if ((Test-Path $inst) -and (Get-Item $inst).Length -gt 100000) { $ok = $true } else { Start-Sleep -Seconds 10 }
+          }
+          if (-not $ok) { throw "Studio installer download failed" }
+          $p = Start-Process -FilePath $inst -PassThru
+          if (-not $p.WaitForExit(600000)) { $p | Stop-Process -Force }
+          $studio = Get-ChildItem "$env:LOCALAPPDATA\Roblox\Versions\*\RobloxStudioBeta.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($studio) { Write-Output "STUDIO OK: $($studio.FullName)" } else { Write-Output "STUDIO NOT FOUND - install it manually after connecting" }
+          Write-Output "GAME FILE: $env:GITHUB_WORKSPACE\game.rbxl"
+          if (Test-Path "$env:GITHUB_WORKSPACE\game.rbxl") { Write-Output "GAME.RBXL PRESENT" } else { Write-Output "GAME.RBXL MISSING" }
+
+      # Buka Studio + game otomatis supaya user tinggal klik File > Publish to Roblox As
+      # (navigasi File Explorer dari HP terlalu susah — dibuktikan run #6, 18 Nov).
+      # Studio mungkin minta login dulu; game kebuka setelah login, atau dari Recent.
+      - name: Open Studio with game
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $studio = Get-ChildItem "$env:LOCALAPPDATA\Roblox\Versions\*\RobloxStudioBeta.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($studio -and (Test-Path "$env:GITHUB_WORKSPACE\game.rbxl")) {
+            Start-Process -FilePath $studio.FullName -ArgumentList "`"$env:GITHUB_WORKSPACE\game.rbxl`""
+            Start-Sleep -Seconds 30
+            $proc = Get-Process RobloxStudioBeta -ErrorAction SilentlyContinue
+            if ($proc) { Write-Output "STUDIO LAUNCHED with game.rbxl (PID $($proc.Id))" } else { Write-Output "STUDIO LAUNCH FAILED - open it manually after connecting" }
+          } else {
+            Write-Output "STUDIO AUTO-OPEN SKIPPED (studio or game missing)"
+          }
+
+      - name: Keep PC alive
+        shell: powershell
+        run: |
+          $hours = [int]"${{ inputs.hours }}"
+          if ($hours -lt 1) { $hours = 1 }
+          if ($hours -gt 5) { $hours = 5 }
+          $end = (Get-Date).AddHours($hours)
+          $id = Get-Content "$env:GITHUB_WORKSPACE\anydesk-id.txt" -Raw
+          $pw = Get-Content "$env:GITHUB_WORKSPACE\anydesk-password.txt" -Raw
+          while ((Get-Date) -lt $end) {
+            Write-Output "ALIVE until $end | ANYDESK ID: $id | PASSWORD: $pw"
+            Start-Sleep -Seconds 300
+          }
+          Write-Output "TIME UP - job ends, PC destroyed"
