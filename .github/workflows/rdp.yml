@@ -109,6 +109,23 @@ jobs:
           Write-Output "GAME FILE: $env:GITHUB_WORKSPACE\game.rbxl"
           if (Test-Path "$env:GITHUB_WORKSPACE\game.rbxl") { Write-Output "GAME.RBXL PRESENT" } else { Write-Output "GAME.RBXL MISSING" }
 
+      # Buka Studio + game otomatis supaya user tinggal klik File > Publish to Roblox As
+      # (navigasi File Explorer dari HP terlalu susah — dibuktikan run #6, 18 Nov).
+      # Studio mungkin minta login dulu; game kebuka setelah login, atau dari Recent.
+      - name: Open Studio with game
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $studio = Get-ChildItem "$env:LOCALAPPDATA\Roblox\Versions\*\RobloxStudioBeta.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($studio -and (Test-Path "$env:GITHUB_WORKSPACE\game.rbxl")) {
+            Start-Process -FilePath $studio.FullName -ArgumentList "`"$env:GITHUB_WORKSPACE\game.rbxl`""
+            Start-Sleep -Seconds 30
+            $proc = Get-Process RobloxStudioBeta -ErrorAction SilentlyContinue
+            if ($proc) { Write-Output "STUDIO LAUNCHED with game.rbxl (PID $($proc.Id))" } else { Write-Output "STUDIO LAUNCH FAILED - open it manually after connecting" }
+          } else {
+            Write-Output "STUDIO AUTO-OPEN SKIPPED (studio or game missing)"
+          }
+
       - name: Keep PC alive
         shell: powershell
         run: |
