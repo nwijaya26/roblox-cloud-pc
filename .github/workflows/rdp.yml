@@ -41,8 +41,16 @@ jobs:
           # Random 12-char password for this run only
           $pw = -join ((48..57)+(65..90)+(97..122) | Get-Random -Count 12 | ForEach-Object {[char]$_})
           $pw | Out-File -FilePath "$env:GITHUB_WORKSPACE\rdp-password.txt" -NoNewline
-          Start-Process -FilePath $rd -ArgumentList "--install" -Wait
+          # --install is INTERACTIVE and hangs on a headless runner; use --silent-install (official RustDesk docs)
+          Start-Process -FilePath $rd -ArgumentList "--silent-install"
+          $installed = "$env:ProgramFiles\RustDesk\rustdesk.exe"
+          $waited = 0
+          while (-not (Test-Path $installed) -and $waited -lt 120) { Start-Sleep -Seconds 5; $waited += 5 }
+          if (Test-Path $installed) { $rd = $installed }
+          Start-Process -FilePath $rd -ArgumentList "--install-service"
           Start-Sleep -Seconds 20
+          $svc = Get-Service -Name 'Rustdesk' -ErrorAction SilentlyContinue
+          if ($svc -and $svc.Status -ne 'Running') { Start-Service -Name 'Rustdesk' -ErrorAction SilentlyContinue; Start-Sleep -Seconds 10 }
           & $rd --password $pw
           Start-Sleep -Seconds 10
           $id = & $rd --get-id
